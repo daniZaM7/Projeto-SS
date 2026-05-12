@@ -54,9 +54,9 @@
 
 #define MICEX_ADC_FRAME_SIZE             512                           /* ADC frame size, in bytes */
 #define MICEX_ADC_BUF_SIZE               (4 * MICEX_ADC_FRAME_SIZE)    /* Internal buffer, should an integer multiple of the frame size to avoid incomplete frames */
-#define MICEX_ADC_SAMPLE_FREQ            (20 * 1000)                   /* Sample frequency, in Hz. Notice that there are lower and higher bounds*/
+#define MICEX_ADC_SAMPLE_FREQ            8000                   /* Sample frequency, in Hz. Notice that there are lower and higher bounds*/
 
-#define MICEX_SOUND_SAMPLES_BUF_SIZE     2048 /* IMPORTANT: If FFT is to be used, must be must be a power of two */
+#define MICEX_SOUND_SAMPLES_BUF_SIZE     2048 /* IMPORTANT: If FFT is to be used, must be a power of two */
                                               /* For time-domain conv. filters there is no such restriction */
                                               
 #define MAX_FILT_IR_LEN                 200     /* Maximum IR filter length */
@@ -65,11 +65,14 @@
 static adc_channel_t channel[1] = {ADC_CHANNEL_3};  // Mic on ADC channel 3
 static TaskHandle_t s_task_handle;
 
-static const char *TAG = "MIC_EXAMPLE";
+static const char *TAG = "COFRE_P3";
 
 /* ADC - Variables to hold data acquisition and parsing */
 __attribute__((aligned(16))) uint8_t result[MICEX_ADC_FRAME_SIZE] = {0}; // Buffer where the results of a continuous read are placed   
 __attribute__((aligned(16))) adc_continuous_data_t parsed_data[MICEX_ADC_FRAME_SIZE / SOC_ADC_DIGI_RESULT_BYTES]; // Buffer where frame parsed data is placed 
+__attribute__((aligned(16))) float output_tom0[CONV_OUT_SIZE];
+__attribute__((aligned(16))) float output_tom1[CONV_OUT_SIZE];
+__attribute__((aligned(16))) float output_tom2[CONV_OUT_SIZE];
 
 /* FreeRTOS tasks and IPC */
 #define PROCESSOR_TASK_STACK_SIZE       8192            // Accomodate calls to dsp functions, log, user vars, ...
@@ -82,6 +85,20 @@ __attribute__((aligned(16))) const float filtro_tom0[128] = {-0.000549, 0.000306
 __attribute__((aligned(16))) const float filtro_tom1[128] = {0.000655, 0.000315, -0.000829, -0.000052, 0.000952, -0.000285, -0.000985, 0.000684, 0.000880, -0.001096, -0.000600, 0.001436, 0.000151, -0.001601, 0.000394, 0.001509, -0.000898, -0.001148, 0.001184, 0.000613, -0.001101, -0.000116, 0.000594, -0.000058, 0.000225, -0.000374, -0.001058, 0.001575, 0.001450, -0.003483, -0.000892, 0.005745, -0.001026, -0.007722, 0.004449, 0.008592, -0.009122, -0.007535, 0.014336, 0.003964, -0.018998, 0.002249, 0.021811, -0.010628, -0.021556, 0.020070, 0.017405, -0.028977, -0.009190, 0.035533, -0.002440, -0.038079, 0.016044, 0.035489, -0.029586, -0.027479, 0.040800, 0.014752, -0.047630, 0.001065, 0.048660, -0.017683, -0.043431, 0.032569, 0.032569, -0.043431, -0.017683, 0.048660, 0.001065, -0.047630, 0.014752, 0.040800, -0.027479, -0.029586, 0.035489, 0.016044, -0.038079, -0.002440, 0.035533, -0.009190, -0.028977, 0.017405, 0.020070, -0.021556, -0.010628, 0.021811, 0.002249, -0.018998, 0.003964, 0.014336, -0.007535, -0.009122, 0.008592, 0.004449, -0.007722, -0.001026, 0.005745, -0.000892, -0.003483, 0.001450, 0.001575, -0.001058, -0.000374, 0.000225, -0.000058, 0.000594, -0.000116, -0.001101, 0.000613, 0.001184, -0.001148, -0.000898, 0.001509, 0.000394, -0.001601, 0.000151, 0.001436, -0.000600, -0.001096, 0.000880, 0.000684, -0.000985, -0.000285, 0.000952, -0.000052, -0.000829, 0.000315, 0.000655};
 
 __attribute__((aligned(16))) const float filtro_tom2[128] = {0.000265, -0.000748, 0.000765, -0.000255, -0.000497, 0.001003, -0.000872, 0.000103, 0.000849, -0.001332, 0.000935, 0.000165, -0.001258, 0.001566, -0.000819, -0.000502, 0.001480, -0.001442, 0.000474, 0.000652, -0.001120, 0.000743, -0.000082, -0.000132, -0.000236, 0.000513, 0.000125, -0.001649, 0.002801, -0.001946, -0.001317, 0.005169, -0.006389, 0.002798, 0.004399, -0.010526, 0.010313, -0.002102, -0.009837, 0.017248, -0.013471, -0.001018, 0.017541, -0.024273, 0.014620, 0.006994, -0.026720, 0.030142, -0.012754, -0.015546, 0.035961, -0.033368, 0.007483, 0.025614, -0.043532, 0.032879, 0.000746, -0.035543, 0.047833, -0.028381, -0.010671, 0.043477, -0.047853, 0.020502, 0.020502, -0.047853, 0.043477, -0.010671, -0.028381, 0.047833, -0.035543, 0.000746, 0.032879, -0.043532, 0.025614, 0.007483, -0.033368, 0.035961, -0.015546, -0.012754, 0.030142, -0.026720, 0.006994, 0.014620, -0.024273, 0.017541, -0.001018, -0.013471, 0.017248, -0.009837, -0.002102, 0.010313, -0.010526, 0.004399, 0.002798, -0.006389, 0.005169, -0.001317, -0.001946, 0.002801, -0.001649, 0.000125, 0.000513, -0.000236, -0.000132, -0.000082, 0.000743, -0.001120, 0.000652, 0.000474, -0.001442, 0.001480, -0.000502, -0.000819, 0.001566, -0.001258, 0.000165, 0.000935, -0.001332, 0.000849, 0.000103, -0.000872, 0.001003, -0.000497, -0.000255, 0.000765, -0.000748, 0.000265};
+
+#define LED_PIN 11 // Pino definido no enunciado
+
+// Definição dos Estados da FSM
+typedef enum {
+    IDLE,
+    AQUIRING,
+    VALIDATING,
+    ERROR_BLINK
+} FSM_State_t;
+
+// Sequências da Turma P3 (Exemplo baseado na lógica do enunciado)
+const int SEQ_ABRIR[4]  = {0, 1, 2, 0}; 
+const int SEQ_FECHAR[4] = {0, 2, 1, 0};
 
 /* *************************************************************** 
  * Function prototypes 
@@ -193,25 +210,89 @@ void pv_processor_task(void *pvParam)
     float * sound_samp_buf_proc;       // Buffer to hold sound samples. Buffers are float because conv() function requires float parameters - avoid conversions     
     
     /* Variable inits */
-    sound_samp_buf_proc = heap_caps_malloc(sizeof(float) * MICEX_SOUND_SAMPLES_BUF_SIZE, MALLOC_CAP_DMA);         
+    sound_samp_buf_proc = heap_caps_malloc(sizeof(float) * MICEX_SOUND_SAMPLES_BUF_SIZE, MALLOC_CAP_DMA);    
+    
+    
+    static FSM_State_t estado_atual = IDLE;
+    static int tentativa[4];
+    static int contador = 0;
     
 
     /* Infinite processing loop */
     for(;;) {
-        /* Waits for new data */
-        xQueueReceive(XQ,(void *)sound_samp_buf_proc,portMAX_DELAY); // Reads a sound sample. Blocks if queue is empty.
-        ESP_LOGV(TAG, "Process Task got a buffer!");
+        // 2. Aplicar Convolução para cada Tom
+        dsps_conv_f32(sound_samp_buf_proc, MICEX_SOUND_SAMPLES_BUF_SIZE, filtro_tom0, 128, output_tom0);
+        dsps_conv_f32(sound_samp_buf_proc, MICEX_SOUND_SAMPLES_BUF_SIZE, filtro_tom1, 128, output_tom1);
+        dsps_conv_f32(sound_samp_buf_proc, MICEX_SOUND_SAMPLES_BUF_SIZE, filtro_tom2, 128, output_tom2);
 
-        /* New buffer - process it */        
-        printf("\nFirst 100 samples of the sound frame:----------- ");
-        for(n=0; n < 100; n++) {            
-            if(n%10 == 0) {
-                printf("\n[%d to %d]:", n,n+9);
-            }
-            printf("%5d ", (int)sound_samp_buf_proc[n]);
-            
+        // 3. Calcular a Energia de cada saída (Soma dos Quadrados)
+        float energia0 = 0, energia1 = 0, energia2 = 0;
+        for (int i = 0; i < CONV_OUT_SIZE; i++) {
+            energia0 += output_tom0[i] * output_tom0[i];
+            energia1 += output_tom1[i] * output_tom1[i];
+            energia2 += output_tom2[i] * output_tom2[i];
         }
-        printf("\n---------------------\n");
+
+        float threshold = 1000000.0; //! Valor a ajustar experimentalmente
+        int tom_detectado = -1;
+
+        if (energia0 > energia1 && energia0 > energia2 && energia0 > threshold) tom_detectado = 0;
+        else if (energia1 > energia0 && energia1 > energia2 && energia1 > threshold) tom_detectado = 1;
+        else if (energia2 > energia0 && energia2 > energia1 && energia2 > threshold) tom_detectado = 2;
+
+        if (tom_detectado != -1) {
+            ESP_LOGI(TAG, "Tom Detectado: %d (E0: %.2f, E1: %.2f, E2: %.2f)", tom_detectado, energia0, energia1, energia2);
+            
+            switch (estado_atual) {
+            case IDLE:
+            case AQUIRING:
+                tentativa[contador] = tom_detectado;
+                contador++;
+                ESP_LOGI(TAG, "Símbolo %d guardado: %d", contador, tom_detectado);
+                
+                if (contador == 4) {
+                    estado_atual = VALIDATING;
+                } else {
+                    estado_atual = AQUIRING;
+                }
+                
+                // Debounce: evitar ler o mesmo tom várias vezes seguidas
+                vTaskDelay(pdMS_TO_TICKS(1000)); 
+                break;
+
+            default:
+                break;
+            }
+        }
+        // Processamento dos estados de saída
+        if (estado_atual == VALIDATING) {
+            if (memcmp(tentativa, SEQ_ABRIR, sizeof(SEQ_ABRIR)) == 0) {
+                ESP_LOGI(TAG, "ACESSO CONCEDIDO: ABRIR");
+                gpio_set_level(LED_PIN, 1); // Liga LED
+                estado_atual = IDLE;
+            } 
+            else if (memcmp(tentativa, SEQ_FECHAR, sizeof(SEQ_FECHAR)) == 0) {
+                ESP_LOGI(TAG, "ACESSO CONCEDIDO: FECHAR");
+                gpio_set_level(LED_PIN, 0); // Desliga LED
+                estado_atual = IDLE;
+            } 
+            else {
+                ESP_LOGW(TAG, "SEQUÊNCIA ERRADA!");
+                estado_atual = ERROR_BLINK;
+            }
+            contador = 0;
+        }
+
+        if (estado_atual == ERROR_BLINK) {
+            // Requisito: LED a piscar durante 5 segundos
+            for (int i = 0; i < 10; i++) {
+                gpio_set_level(LED_PIN, 1);
+                vTaskDelay(pdMS_TO_TICKS(250));
+                gpio_set_level(LED_PIN, 0);
+                vTaskDelay(pdMS_TO_TICKS(250));
+            }
+            estado_atual = IDLE;
+        }
     }
 }
 
