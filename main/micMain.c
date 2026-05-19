@@ -180,13 +180,30 @@ void pv_processor_task(void *pvParam)
     int tentativa[4];
     int contador = 0;
     
-    // Threshold ajustável (ajustar experimentalmente com o ruído de fundo da sala)
-    float threshold = 5000000.0; 
+    // NOVA VARIÁVEL: A "memória" do último som
+    int ultimo_tom = -1; 
+    
+    // O teu threshold ajustado 
+    float threshold = 500.0; 
 
     for(;;) {
         // Aguarda por novos dados do ADC
         if (xQueueReceive(XQ, (void *)sound_samp_buf_proc, portMAX_DELAY) == pdTRUE) {
             
+            // ---------------------------------------------------------
+            // >> ALTERAÇÃO 1: REMOVER A COMPONENTE DC (Centrar no zero)
+            // ---------------------------------------------------------
+            float media = 0;
+            for(int i=0; i < MICEX_SOUND_SAMPLES_BUF_SIZE; i++) {
+                media += sound_samp_buf_proc[i];
+            }
+            media = media / MICEX_SOUND_SAMPLES_BUF_SIZE;
+            
+            for(int i=0; i < MICEX_SOUND_SAMPLES_BUF_SIZE; i++) {
+                sound_samp_buf_proc[i] -= media; // Puxa a onda para o zero!
+            }
+            // ---------------------------------------------------------
+
             /* 1. Aplicação dos Filtros FIR via Convolução */
             dsps_conv_f32(sound_samp_buf_proc, MICEX_SOUND_SAMPLES_BUF_SIZE, filtro_tom0, 128, output_tom0);
             dsps_conv_f32(sound_samp_buf_proc, MICEX_SOUND_SAMPLES_BUF_SIZE, filtro_tom1, 128, output_tom1);
@@ -200,47 +217,62 @@ void pv_processor_task(void *pvParam)
                 energia2 += output_tom2[i] * output_tom2[i];
             }
 
+            // ---------------------------------------------------------
+            // >> ALTERAÇÃO 2: IMPRIMIR AS ENERGIAS REAIS (Para descobrires o threshold)
+            // ---------------------------------------------------------
+            // Podes comentar esta linha mais tarde quando tudo funcionar
+            ESP_LOGI(TAG, "Leitura: E0:%.0f | E1:%.0f | E2:%.0f", energia0, energia1, energia2);
+            // ---------------------------------------------------------
+
             /* 3. Deteção do Tom */
             int tom_detetado = -1;
             if (energia0 > energia1 && energia0 > energia2 && energia0 > threshold) tom_detetado = 0;
             else if (energia1 > energia0 && energia1 > energia2 && energia1 > threshold) tom_detetado = 1;
             else if (energia2 > energia0 && energia2 > energia1 && energia2 > threshold) tom_detetado = 2;
 
-            /* 4. Lógica da Máquina de Estados */
+            /* =========================================================
+               4. NOVA LÓGICA DE "QUALQUER DURAÇÃO" (Edge Detection)
+               ========================================================= */
             if (tom_detetado != -1) {
-                ESP_LOGI(TAG, "Tom detetado: %d (Energias -> E0:%.1f | E1:%.1f | E2:%.1f)", tom_detetado, energia0, energia1, energia2);
-                
-                // Transita nos estados Num 1 -> Num 2 -> Num 3 -> Num 4
-                tentativa[contador++] = tom_detetado;
-                
-                if (contador == 4) {
-                    // Estado: Verificar
-                    if (memcmp(tentativa, SEQ_ABRIR, sizeof(SEQ_ABRIR)) == 0) {
-                        ESP_LOGI(TAG, "Acesso Concedido: ABRIR");
-                        gpio_set_level(LED_PIN, 1); 
-                    } 
-                    else if (memcmp(tentativa, SEQ_FECHAR, sizeof(SEQ_FECHAR)) == 0) {
-                        ESP_LOGI(TAG, "Acesso Concedido: FECHAR");
-                        gpio_set_level(LED_PIN, 0); 
-                    } 
-                    else {
-                        // Estado: Erro / Piscar 5s
-                        ESP_LOGW(TAG, "Sequência Errada! A piscar LED por 5 segundos...");
-                        for (int i = 0; i < 10; i++) { 
-                            gpio_set_level(LED_PIN, 1);
-                            vTaskDelay(pdMS_TO_TICKS(250));
-                            gpio_set_level(LED_PIN, 0);
-                            vTaskDelay(pdMS_TO_TICKS(250));
+                // SÓ avança se o som for DIFERENTE do som que já estava a tocar
+                if (tom_detetado != ultimo_tom) {
+                    ultimo_tom = tom_detetado; // Guarda na memória
+                    
+                    ESP_LOGI(TAG, "NOVO Tom Registado: %d (Energia: E0:%.0f | E1:%.0f | E2:%.0f)", 
+                             tom_detetado, energia0, energia1, energia2);
+                    
+                    tentativa[contador++] = tom_detetado;
+                    
+                    // Verifica se já temos 4 toques
+                    if (contador == 4) {
+                        if (memcmp(tentativa, SEQ_ABRIR, sizeof(SEQ_ABRIR)) == 0) {
+                            ESP_LOGI(TAG, "Acesso Concedido: ABRIR");
+                            gpio_set_level(LED_PIN, 1); 
+                        } 
+                        else if (memcmp(tentativa, SEQ_FECHAR, sizeof(SEQ_FECHAR)) == 0) {
+                            ESP_LOGI(TAG, "Acesso Concedido: FECHAR");
+                            gpio_set_level(LED_PIN, 0); 
+                        } 
+                        else {
+                            ESP_LOGW(TAG, "Sequência Errada! A piscar LED...");
+                            for (int i = 0; i < 10; i++) { 
+                                gpio_set_level(LED_PIN, 1);
+                                vTaskDelay(pdMS_TO_TICKS(150));
+                                gpio_set_level(LED_PIN, 0);
+                                vTaskDelay(pdMS_TO_TICKS(150));
+                            }
                         }
+                        contador = 0; // Prepara para nova tentativa
                     }
-                    // Retorna ao estado IDLE
-                    contador = 0; 
                 }
-                
-                // Debounce para impedir leituras múltiplas e limpar restos de som no buffer
-                vTaskDelay(pdMS_TO_TICKS(800));
-                xQueueReset(XQ); 
+            } else {
+                // SE ESTIVER EM SILÊNCIO:
+                // Apaga a memória. Assim, o utilizador pode repetir o mesmo Tom.
+                ultimo_tom = -1;
             }
+            
+            // Limpa a fila de processamento para evitar acumulação de buffer antigo
+            xQueueReset(XQ);
         }
     }
 }
