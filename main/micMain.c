@@ -36,142 +36,120 @@
 
 #include "sdkconfig.h"
 #include "esp_log.h"
-#include "freertos/FreeRTOS.h"      // FreeRTOS includes
+#include "freertos/FreeRTOS.h"      
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "freertos/queue.h"
-#include "esp_adc/adc_continuous.h" // For ESP ADC
-#include "esp_dsp.h"                // For ESP DSP functions, conv in the case
-#include "esp_private/esp_clk.h"    // For ESP clock functions
+#include "esp_adc/adc_continuous.h" 
+#include "esp_dsp.h"                
+#include "esp_private/esp_clk.h"    
+#include "driver/gpio.h" // Adicionado para controlo do LED
+
 
 /* ********************************
  * Global defines 
  **********************************/
 #define MICEX_ADC_UNIT                    ADC_UNIT_1
 #define MICEX_ADC_CONV_MODE               ADC_CONV_SINGLE_UNIT_1
-#define MICEX_ADC_ATTEN                   ADC_ATTEN_DB_2_5            // Use Vref/0.75, 1.3 ... 1.5 V
-#define MICEX_ADC_BIT_WIDTH               SOC_ADC_DIGI_MAX_BITWIDTH   // 12 bits resolution (maximum)
+#define MICEX_ADC_ATTEN                   ADC_ATTEN_DB_2_5            
+#define MICEX_ADC_BIT_WIDTH               SOC_ADC_DIGI_MAX_BITWIDTH   
 
-#define MICEX_ADC_FRAME_SIZE             512                           /* ADC frame size, in bytes */
-#define MICEX_ADC_BUF_SIZE               (4 * MICEX_ADC_FRAME_SIZE)    /* Internal buffer, should an integer multiple of the frame size to avoid incomplete frames */
-#define MICEX_ADC_SAMPLE_FREQ            8000                   /* Sample frequency, in Hz. Notice that there are lower and higher bounds*/
+#define MICEX_ADC_FRAME_SIZE             512                           
+#define MICEX_ADC_BUF_SIZE               (4 * MICEX_ADC_FRAME_SIZE)    
+#define MICEX_ADC_SAMPLE_FREQ            8000 // Frequência de amostragem definida para os filtros
 
-#define MICEX_SOUND_SAMPLES_BUF_SIZE     2048 /* IMPORTANT: If FFT is to be used, must be a power of two */
-                                              /* For time-domain conv. filters there is no such restriction */
-                                              
-#define MAX_FILT_IR_LEN                 200     /* Maximum IR filter length */
+#define MICEX_SOUND_SAMPLES_BUF_SIZE     2048 
+#define CONV_OUT_SIZE                    (MICEX_SOUND_SAMPLES_BUF_SIZE + 128 - 1) // Tamanho da saída da convolução (N + M - 1)
+
+#define LED_PIN 11 // Pino definido no enunciado
 
 /* Global variable declarations */
-static adc_channel_t channel[1] = {ADC_CHANNEL_3};  // Mic on ADC channel 3
+static adc_channel_t channel[1] = {ADC_CHANNEL_3};  // Microfone no ADC channel 3
 static TaskHandle_t s_task_handle;
 
 static const char *TAG = "COFRE_P3";
 
 /* ADC - Variables to hold data acquisition and parsing */
-__attribute__((aligned(16))) uint8_t result[MICEX_ADC_FRAME_SIZE] = {0}; // Buffer where the results of a continuous read are placed   
-__attribute__((aligned(16))) adc_continuous_data_t parsed_data[MICEX_ADC_FRAME_SIZE / SOC_ADC_DIGI_RESULT_BYTES]; // Buffer where frame parsed data is placed 
+__attribute__((aligned(16))) uint8_t result[MICEX_ADC_FRAME_SIZE] = {0};   
+__attribute__((aligned(16))) adc_continuous_data_t parsed_data[MICEX_ADC_FRAME_SIZE / SOC_ADC_DIGI_RESULT_BYTES]; 
+
+/* Buffers globais para o resultado da convolução */
 __attribute__((aligned(16))) float output_tom0[CONV_OUT_SIZE];
 __attribute__((aligned(16))) float output_tom1[CONV_OUT_SIZE];
 __attribute__((aligned(16))) float output_tom2[CONV_OUT_SIZE];
 
 /* FreeRTOS tasks and IPC */
-#define PROCESSOR_TASK_STACK_SIZE       8192            // Accomodate calls to dsp functions, log, user vars, ...
-#define PROCESSOR_TASK_PRIORITY	( tskIDLE_PRIORITY + 4 )
-QueueHandle_t XQ;    /* Queue handle */
+#define PROCESSOR_TASK_STACK_SIZE       8192            
+#define PROCESSOR_TASK_PRIORITY ( tskIDLE_PRIORITY + 4 )
+QueueHandle_t XQ;    
 
-/* Impulse reponse filter and related variables */
-__attribute__((aligned(16))) const float filtro_tom0[128] = {-0.000549, 0.000306, 0.000850, 0.000353, -0.000667, -0.000951, -0.000022, 0.001071, 0.000908, -0.000474, -0.001412, -0.000617, 0.001055, 0.001506, 0.000073, -0.001489, -0.001207, 0.000523, 0.001479, 0.000587, -0.000762, -0.000857, -0.000041, 0.000194, -0.000177, 0.000236, 0.001367, 0.000949, -0.001831, -0.003554, -0.000438, 0.005069, 0.005334, -0.002324, -0.009403, -0.005226, 0.007709, 0.013397, 0.001835, -0.015041, -0.015020, 0.005464, 0.022484, 0.012328, -0.015974, -0.027425, -0.004296, 0.027546, 0.027281, -0.008521, -0.037023, -0.020487, 0.023823, 0.041170, 0.007270, -0.038047, -0.037793, 0.010137, 0.047382, 0.026623, -0.027978, -0.049005, -0.009598, 0.042052, 0.042052, -0.009598, -0.049005, -0.027978, 0.026623, 0.047382, 0.010137, -0.037793, -0.038047, 0.007270, 0.041170, 0.023823, -0.020487, -0.037023, -0.008521, 0.027281, 0.027546, -0.004296, -0.027425, -0.015974, 0.012328, 0.022484, 0.005464, -0.015020, -0.015041, 0.001835, 0.013397, 0.007709, -0.005226, -0.009403, -0.002324, 0.005334, 0.005069, -0.000438, -0.003554, -0.001831, 0.000949, 0.001367, 0.000236, -0.000177, 0.000194, -0.000041, -0.000857, -0.000762, 0.000587, 0.001479, 0.000523, -0.001207, -0.001489, 0.000073, 0.001506, 0.001055, -0.000617, -0.001412, -0.000474, 0.000908, 0.001071, -0.000022, -0.000951, -0.000667, 0.000353, 0.000850, 0.000306, -0.000549};
-
-__attribute__((aligned(16))) const float filtro_tom1[128] = {0.000655, 0.000315, -0.000829, -0.000052, 0.000952, -0.000285, -0.000985, 0.000684, 0.000880, -0.001096, -0.000600, 0.001436, 0.000151, -0.001601, 0.000394, 0.001509, -0.000898, -0.001148, 0.001184, 0.000613, -0.001101, -0.000116, 0.000594, -0.000058, 0.000225, -0.000374, -0.001058, 0.001575, 0.001450, -0.003483, -0.000892, 0.005745, -0.001026, -0.007722, 0.004449, 0.008592, -0.009122, -0.007535, 0.014336, 0.003964, -0.018998, 0.002249, 0.021811, -0.010628, -0.021556, 0.020070, 0.017405, -0.028977, -0.009190, 0.035533, -0.002440, -0.038079, 0.016044, 0.035489, -0.029586, -0.027479, 0.040800, 0.014752, -0.047630, 0.001065, 0.048660, -0.017683, -0.043431, 0.032569, 0.032569, -0.043431, -0.017683, 0.048660, 0.001065, -0.047630, 0.014752, 0.040800, -0.027479, -0.029586, 0.035489, 0.016044, -0.038079, -0.002440, 0.035533, -0.009190, -0.028977, 0.017405, 0.020070, -0.021556, -0.010628, 0.021811, 0.002249, -0.018998, 0.003964, 0.014336, -0.007535, -0.009122, 0.008592, 0.004449, -0.007722, -0.001026, 0.005745, -0.000892, -0.003483, 0.001450, 0.001575, -0.001058, -0.000374, 0.000225, -0.000058, 0.000594, -0.000116, -0.001101, 0.000613, 0.001184, -0.001148, -0.000898, 0.001509, 0.000394, -0.001601, 0.000151, 0.001436, -0.000600, -0.001096, 0.000880, 0.000684, -0.000985, -0.000285, 0.000952, -0.000052, -0.000829, 0.000315, 0.000655};
-
-__attribute__((aligned(16))) const float filtro_tom2[128] = {0.000265, -0.000748, 0.000765, -0.000255, -0.000497, 0.001003, -0.000872, 0.000103, 0.000849, -0.001332, 0.000935, 0.000165, -0.001258, 0.001566, -0.000819, -0.000502, 0.001480, -0.001442, 0.000474, 0.000652, -0.001120, 0.000743, -0.000082, -0.000132, -0.000236, 0.000513, 0.000125, -0.001649, 0.002801, -0.001946, -0.001317, 0.005169, -0.006389, 0.002798, 0.004399, -0.010526, 0.010313, -0.002102, -0.009837, 0.017248, -0.013471, -0.001018, 0.017541, -0.024273, 0.014620, 0.006994, -0.026720, 0.030142, -0.012754, -0.015546, 0.035961, -0.033368, 0.007483, 0.025614, -0.043532, 0.032879, 0.000746, -0.035543, 0.047833, -0.028381, -0.010671, 0.043477, -0.047853, 0.020502, 0.020502, -0.047853, 0.043477, -0.010671, -0.028381, 0.047833, -0.035543, 0.000746, 0.032879, -0.043532, 0.025614, 0.007483, -0.033368, 0.035961, -0.015546, -0.012754, 0.030142, -0.026720, 0.006994, 0.014620, -0.024273, 0.017541, -0.001018, -0.013471, 0.017248, -0.009837, -0.002102, 0.010313, -0.010526, 0.004399, 0.002798, -0.006389, 0.005169, -0.001317, -0.001946, 0.002801, -0.001649, 0.000125, 0.000513, -0.000236, -0.000132, -0.000082, 0.000743, -0.001120, 0.000652, 0.000474, -0.001442, 0.001480, -0.000502, -0.000819, 0.001566, -0.001258, 0.000165, 0.000935, -0.001332, 0.000849, 0.000103, -0.000872, 0.001003, -0.000497, -0.000255, 0.000765, -0.000748, 0.000265};
-
-#define LED_PIN 11 // Pino definido no enunciado
-
-// Definição dos Estados da FSM
-typedef enum {
-    IDLE,
-    AQUIRING,
-    VALIDATING,
-    ERROR_BLINK
-} FSM_State_t;
-
-// Sequências da Turma P3 (Exemplo baseado na lógica do enunciado)
+/* Sequências de Acesso */
 const int SEQ_ABRIR[4]  = {0, 1, 2, 0}; 
 const int SEQ_FECHAR[4] = {0, 2, 1, 0};
 
-/* *************************************************************** 
- * Function prototypes 
- *****************************************************************/
-/* Inits the ADC for continuous mode (channels, attenuation, frequency, handles, ...)*/
- static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc_continuous_handle_t *out_handle);
- /* Callback of ADC driver. Executed whenever a new frame is available */
-static bool s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data);
-/* Task called to process one full buffer of data. A queue + blocking read is used for synchronization and data passing */
-static void pv_processor_task(void *pvParam);
+/* Filtros FIR (N=128, Fs=8000) */
+__attribute__((aligned(16))) const float filtro_tom0[128] = {0.000465, -0.000268, -0.000768, -0.000331, 0.000650, 0.000967, 0.000023, -0.001200, -0.001073, 0.000595, 0.001888, 0.000885, -0.001634, -0.002541, -0.000135, 0.003074, 0.002813, -0.001402, -0.004667, -0.002258, 0.003762, 0.005914, 0.000471, -0.006661, -0.006143, 0.002717, 0.009460, 0.004697, -0.007063, -0.011244, -0.001176, 0.011842, 0.011040, -0.004325, -0.015915, -0.008122, 0.011094, 0.017973, 0.002309, -0.017848, -0.016886, 0.005845, 0.022971, 0.012071, -0.015040, -0.024902, -0.003772, 0.023451, 0.022574, -0.006868, -0.029134, -0.015772, 0.017977, 0.030511, 0.005301, -0.027344, -0.026818, 0.007114, 0.032941, 0.018365, -0.019181, -0.033440, -0.006529, 0.028563, 0.028563, -0.006529, -0.033440, -0.019181, 0.018365, 0.032941, 0.007114, -0.026818, -0.027344, 0.005301, 0.030511, 0.017977, -0.015772, -0.029134, -0.006868, 0.022574, 0.023451, -0.003772, -0.024902, -0.015040, 0.012071, 0.022971, 0.005845, -0.016886, -0.017848, 0.002309, 0.017973, 0.011094, -0.008122, -0.015915, -0.004325, 0.011040, 0.011842, -0.001176, -0.011244, -0.007063, 0.004697, 0.009460, 0.002717, -0.006143, -0.006661, 0.000471, 0.005914, 0.003762, -0.002258, -0.004667, -0.001402, 0.002813, 0.003074, -0.000135, -0.002541, -0.001634, 0.000885, 0.001888, 0.000595, -0.001073, -0.001200, 0.000023, 0.000967, 0.000650, -0.000331, -0.000768, -0.000268, 0.000465};
 
-/******************************************************************* 
- * The main task 
+__attribute__((aligned(16))) const float filtro_tom1[128] = {-0.000556, -0.000272, 0.000750, 0.000047, -0.000928, 0.000291, 0.001049, -0.000765, -0.001041, 0.001372, 0.000805, -0.002058, -0.000242, 0.002702, -0.000718, -0.003122, 0.002073, 0.003095, -0.003714, -0.002405, 0.005413, 0.000900, -0.006834, 0.001443, 0.007573, -0.004473, -0.007238, 0.007844, 0.005534, -0.011034, -0.002354, 0.013416, -0.002151, -0.014356, 0.007544, 0.013341, -0.013129, -0.010099, 0.018037, 0.004701, -0.021351, 0.002402, 0.022277, -0.010399, -0.020293, 0.018212, 0.015286, -0.024658, -0.007613, 0.028632, -0.001909, -0.029308, 0.012093, 0.026298, -0.021559, -0.019750, 0.028938, 0.010357, -0.033101, 0.000729, 0.033349, -0.012059, -0.029537, 0.022114, 0.022114, -0.029537, -0.012059, 0.033349, 0.000729, -0.033101, 0.010357, 0.028938, -0.019750, -0.021559, 0.026298, 0.012093, -0.029308, -0.001909, 0.028632, -0.007613, -0.024658, 0.015286, 0.018212, -0.020293, -0.010399, 0.022277, 0.002402, -0.021351, 0.004701, 0.018037, -0.010099, -0.013129, 0.013341, 0.007544, -0.014356, -0.002151, 0.013416, -0.002354, -0.011034, 0.005534, 0.007844, -0.007238, -0.004473, 0.007573, 0.001443, -0.006834, 0.000900, 0.005413, -0.002405, -0.003714, 0.003095, 0.002073, -0.003122, -0.000718, 0.002702, -0.000242, -0.002058, 0.000805, 0.001372, -0.001041, -0.000765, 0.001049, 0.000291, -0.000928, 0.000047, 0.000750, -0.000272, -0.000556};
+
+__attribute__((aligned(16))) const float filtro_tom2[128] = {-0.000221, 0.000657, -0.000698, 0.000244, 0.000486, -0.001026, 0.000936, -0.000118, -0.001010, 0.001679, -0.001256, -0.000240, 0.001962, -0.002654, 0.001519, 0.001053, -0.003471, 0.003872, -0.001477, -0.002552, 0.005566, -0.005110, 0.000816, 0.004903, -0.008117, 0.006023, 0.000775, -0.008133, 0.010824, -0.006195, -0.003513, 0.012077, -0.013242, 0.005223, 0.007443, -0.016368, 0.014848, -0.002820, -0.012385, 0.020470, -0.015141, -0.001098, 0.017925, -0.023762, 0.013750, 0.006362, -0.023459, 0.025643, -0.010533, -0.012536, 0.028282, -0.025659, 0.005628, 0.018976, -0.031713, 0.023598, 0.000540, -0.024924, 0.033217, -0.019550, -0.007313, 0.029635, -0.032514, 0.013909, 0.013909, -0.032514, 0.029635, -0.007313, -0.019550, 0.033217, -0.024924, 0.000540, 0.023598, -0.031713, 0.018976, 0.005628, -0.025659, 0.028282, -0.012536, -0.010533, 0.025643, -0.023459, 0.006362, 0.013750, -0.023762, 0.017925, -0.001098, -0.015141, 0.020470, -0.012385, -0.002820, 0.014848, -0.016368, 0.007443, 0.005223, -0.013242, 0.012077, -0.003513, -0.006195, 0.010824, -0.008133, 0.000775, 0.006023, -0.008117, 0.004903, 0.000816, -0.005110, 0.005566, -0.002552, -0.001477, 0.003872, -0.003471, 0.001053, 0.001519, -0.002654, 0.001962, -0.000240, -0.001256, 0.001679, -0.001010, -0.000118, 0.000936, -0.001026, 0.000486, 0.000244, -0.000698, 0.000657, -0.000221};
+/* *************************************************************** * Function prototypes 
+ *****************************************************************/
+ static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc_continuous_handle_t *out_handle);
+ static bool s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data);
+ static void pv_processor_task(void *pvParam);
+
+/******************************************************************* * The main task 
  *******************************************************************/
 void app_main(void)
 {
-    /* Variable declarations */
-    esp_err_t ret;          // Generic return code variable
-    esp_err_t parse_ret;    // return code of ADC frame parse function 
-    uint32_t ret_num = 0;   // Length of bytes return by a read operation
-    uint32_t sb_count = 0;   // For counting the number of acquired samples    
-    uint32_t num_parsed_samples = 0;    // To count the number of parsed samples
+    esp_err_t ret;          
+    esp_err_t parse_ret;    
+    uint32_t ret_num = 0;   
+    uint32_t sb_count = 0;      
+    uint32_t num_parsed_samples = 0;    
     
-    adc_continuous_evt_cbs_t cbs;   // Variable for setting callback type (internal poll full, or frame conversion completed)    
-    adc_continuous_handle_t handle = NULL;  //Handle for ADC          
+    adc_continuous_evt_cbs_t cbs;      
+    adc_continuous_handle_t handle = NULL;           
 
-    float * sound_samp_buf_ADC;   // Buffer to hold sound samples. Sound buffers are float because conv() function requires float parameters - avoid conversions 
+    float * sound_samp_buf_ADC;   
     
-    /* Variable inits */
-    memset(result, 0x00, MICEX_ADC_FRAME_SIZE); // Init frame buffer     
+    memset(result, 0x00, MICEX_ADC_FRAME_SIZE);      
     sound_samp_buf_ADC = heap_caps_malloc(sizeof(float) * MICEX_SOUND_SAMPLES_BUF_SIZE, MALLOC_CAP_DMA);     
 
-    s_task_handle = xTaskGetCurrentTaskHandle();    // Get handle of the current task
+    s_task_handle = xTaskGetCurrentTaskHandle();    
 
-    cbs.on_conv_done = s_conv_done_cb;  // Callback called when one conversion frame is done     
-    cbs.on_pool_ovf = NULL;          // Don't set callback for internbal buffer overflow         
+    cbs.on_conv_done = s_conv_done_cb;      
+    cbs.on_pool_ovf = NULL;                  
 
-    /* Set log level */
-    /* Debug allow to see variable values */
-    /* Info only shows the decision */
-    /* Verbose shows a trace of calls an some additional vars*/
     esp_log_level_set(TAG,ESP_LOG_DEBUG);
 
-    /* Processor task and Queue inits */
-    XQ=xQueueCreate(1, sizeof(float)*MICEX_SOUND_SAMPLES_BUF_SIZE); // Create queue to store one full sample period of sound
+    /* Configuração do GPIO para o LED (Requisito do Guião) */
+    gpio_reset_pin(LED_PIN);
+    gpio_set_direction(LED_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(LED_PIN, 0); // Inicia desligado (porta fechada)
+
+    XQ = xQueueCreate(1, sizeof(float)*MICEX_SOUND_SAMPLES_BUF_SIZE); 
     xTaskCreate(pv_processor_task, "Processor", PROCESSOR_TASK_STACK_SIZE, NULL, PROCESSOR_TASK_PRIORITY, NULL );
 
-    /* Init ADC */
-    continuous_adc_init(channel, sizeof(channel) / sizeof(adc_channel_t), &handle); // Call init function
-    ESP_ERROR_CHECK(adc_continuous_register_event_callbacks(handle, &cbs, NULL));   // Regiter callbacks
-    ESP_ERROR_CHECK(adc_continuous_start(handle));                                  // Start the ADC
+    continuous_adc_init(channel, sizeof(channel) / sizeof(adc_channel_t), &handle); 
+    ESP_ERROR_CHECK(adc_continuous_register_event_callbacks(handle, &cbs, NULL));   
+    ESP_ERROR_CHECK(adc_continuous_start(handle));                                  
 
-    /* Infinite loop - wait for data and process it */
-    /* Synchronization with ADC is obtained via the ulTaskNotifyTake(pdTRUE, portMAX_DELAY); call */
-    /*     that assures that processing does not proceed until a notification that a frame was acquired*/
     while (1) {        
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY); // Wait for a new frame
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY); 
 
         while (1) {
             ret = adc_continuous_read(handle, result, MICEX_ADC_FRAME_SIZE, &ret_num, 0);
             if (ret == ESP_OK) {
-                ESP_LOGV(TAG, "ret is %x, ret_num is %"PRIu32" bytes", ret, ret_num);                
-                /* One frame received. Extract samples from frame and put them on sound sample buffer*/
                 parse_ret = adc_continuous_parse_data(handle, result, ret_num, parsed_data, &num_parsed_samples);
                 if (parse_ret == ESP_OK) {
                     
                     for (int i = 0; i < num_parsed_samples; i++) {
                         sound_samp_buf_ADC[sb_count] = (float) parsed_data[i].raw_data;                           
                         sb_count+=1;
-                        if(sb_count == MICEX_SOUND_SAMPLES_BUF_SIZE) { // The sound buffer is full. Process it ... */
-                            ESP_LOGD(TAG, "sound buffer acquired. Time to process ...\n");                
-                            xQueueSend(XQ,(void *)sound_samp_buf_ADC,0);     // Places the sound buffer in the queue. If the queue is full skip it (ticksTo Wait set to 0)
-                                                                        // The consumer/processing task is automatically waked if blocked in the Queue
+                        if(sb_count == MICEX_SOUND_SAMPLES_BUF_SIZE) { 
+                            xQueueSend(XQ,(void *)sound_samp_buf_ADC,0);     
                             sb_count = 0;
                         }
                     }
@@ -179,12 +157,8 @@ void app_main(void)
                 } else {
                     ESP_LOGE(TAG, "Data parsing failed: %s", esp_err_to_name(parse_ret));
                 }
-                /*                  
-                 * To avoid a task watchdog timeout, add a delay here. 
-                 */
                 vTaskDelay(1);
             } else if (ret == ESP_ERR_TIMEOUT) {
-                //We try to read `EXAMPLE_READ_LEN` until API returns timeout, which means there's no available data
                 break;
             }
         }
@@ -194,119 +168,90 @@ void app_main(void)
     ESP_ERROR_CHECK(adc_continuous_deinit(handle));
 }
 
-
-/* **********************************************************************************************
+/************************************************************************************************
  * Task activated when there is a full buffer of sound samples data available
- * The task reads a queue in blocking mode. This wait it awakes whenever the ADC processing code
- *      (the app_main taks in the case) delivers a new full buffer of data. 
- * Note that the use of a Queue and two separate buffers (ADC and processing) decouples the 
- *      acquisition from processing. I.e., processing can take as much time as needed without race conditions
- *      or any other sort of interference. The cost is overhead ...
  ************************************************************************************************/
 void pv_processor_task(void *pvParam)
 {
-    /* Local vars, for auxiliary computations */    
-    int n;        
-    float * sound_samp_buf_proc;       // Buffer to hold sound samples. Buffers are float because conv() function requires float parameters - avoid conversions     
+    float * sound_samp_buf_proc;           
+    sound_samp_buf_proc = heap_caps_malloc(sizeof(float) * MICEX_SOUND_SAMPLES_BUF_SIZE, MALLOC_CAP_DMA);         
     
-    /* Variable inits */
-    sound_samp_buf_proc = heap_caps_malloc(sizeof(float) * MICEX_SOUND_SAMPLES_BUF_SIZE, MALLOC_CAP_DMA);    
+    // Variáveis da Máquina de Estados (FSM)
+    int tentativa[4];
+    int contador = 0;
     
-    
-    static FSM_State_t estado_atual = IDLE;
-    static int tentativa[4];
-    static int contador = 0;
-    
+    // Threshold ajustável (ajustar experimentalmente com o ruído de fundo da sala)
+    float threshold = 5000000.0; 
 
-    /* Infinite processing loop */
     for(;;) {
-        // 2. Aplicar Convolução para cada Tom
-        dsps_conv_f32(sound_samp_buf_proc, MICEX_SOUND_SAMPLES_BUF_SIZE, filtro_tom0, 128, output_tom0);
-        dsps_conv_f32(sound_samp_buf_proc, MICEX_SOUND_SAMPLES_BUF_SIZE, filtro_tom1, 128, output_tom1);
-        dsps_conv_f32(sound_samp_buf_proc, MICEX_SOUND_SAMPLES_BUF_SIZE, filtro_tom2, 128, output_tom2);
-
-        // 3. Calcular a Energia de cada saída (Soma dos Quadrados)
-        float energia0 = 0, energia1 = 0, energia2 = 0;
-        for (int i = 0; i < CONV_OUT_SIZE; i++) {
-            energia0 += output_tom0[i] * output_tom0[i];
-            energia1 += output_tom1[i] * output_tom1[i];
-            energia2 += output_tom2[i] * output_tom2[i];
-        }
-
-        float threshold = 1000000.0; //! Valor a ajustar experimentalmente
-        int tom_detectado = -1;
-
-        if (energia0 > energia1 && energia0 > energia2 && energia0 > threshold) tom_detectado = 0;
-        else if (energia1 > energia0 && energia1 > energia2 && energia1 > threshold) tom_detectado = 1;
-        else if (energia2 > energia0 && energia2 > energia1 && energia2 > threshold) tom_detectado = 2;
-
-        if (tom_detectado != -1) {
-            ESP_LOGI(TAG, "Tom Detectado: %d (E0: %.2f, E1: %.2f, E2: %.2f)", tom_detectado, energia0, energia1, energia2);
+        // Aguarda por novos dados do ADC
+        if (xQueueReceive(XQ, (void *)sound_samp_buf_proc, portMAX_DELAY) == pdTRUE) {
             
-            switch (estado_atual) {
-            case IDLE:
-            case AQUIRING:
-                tentativa[contador] = tom_detectado;
-                contador++;
-                ESP_LOGI(TAG, "Símbolo %d guardado: %d", contador, tom_detectado);
+            /* 1. Aplicação dos Filtros FIR via Convolução */
+            dsps_conv_f32(sound_samp_buf_proc, MICEX_SOUND_SAMPLES_BUF_SIZE, filtro_tom0, 128, output_tom0);
+            dsps_conv_f32(sound_samp_buf_proc, MICEX_SOUND_SAMPLES_BUF_SIZE, filtro_tom1, 128, output_tom1);
+            dsps_conv_f32(sound_samp_buf_proc, MICEX_SOUND_SAMPLES_BUF_SIZE, filtro_tom2, 128, output_tom2);
+
+            /* 2. Cálculo da Energia (Soma dos quadrados) */
+            float energia0 = 0, energia1 = 0, energia2 = 0;
+            for (int i = 0; i < CONV_OUT_SIZE; i++) {
+                energia0 += output_tom0[i] * output_tom0[i];
+                energia1 += output_tom1[i] * output_tom1[i];
+                energia2 += output_tom2[i] * output_tom2[i];
+            }
+
+            /* 3. Deteção do Tom */
+            int tom_detetado = -1;
+            if (energia0 > energia1 && energia0 > energia2 && energia0 > threshold) tom_detetado = 0;
+            else if (energia1 > energia0 && energia1 > energia2 && energia1 > threshold) tom_detetado = 1;
+            else if (energia2 > energia0 && energia2 > energia1 && energia2 > threshold) tom_detetado = 2;
+
+            /* 4. Lógica da Máquina de Estados */
+            if (tom_detetado != -1) {
+                ESP_LOGI(TAG, "Tom detetado: %d (Energias -> E0:%.1f | E1:%.1f | E2:%.1f)", tom_detetado, energia0, energia1, energia2);
+                
+                // Transita nos estados Num 1 -> Num 2 -> Num 3 -> Num 4
+                tentativa[contador++] = tom_detetado;
                 
                 if (contador == 4) {
-                    estado_atual = VALIDATING;
-                } else {
-                    estado_atual = AQUIRING;
+                    // Estado: Verificar
+                    if (memcmp(tentativa, SEQ_ABRIR, sizeof(SEQ_ABRIR)) == 0) {
+                        ESP_LOGI(TAG, "Acesso Concedido: ABRIR");
+                        gpio_set_level(LED_PIN, 1); 
+                    } 
+                    else if (memcmp(tentativa, SEQ_FECHAR, sizeof(SEQ_FECHAR)) == 0) {
+                        ESP_LOGI(TAG, "Acesso Concedido: FECHAR");
+                        gpio_set_level(LED_PIN, 0); 
+                    } 
+                    else {
+                        // Estado: Erro / Piscar 5s
+                        ESP_LOGW(TAG, "Sequência Errada! A piscar LED por 5 segundos...");
+                        for (int i = 0; i < 10; i++) { 
+                            gpio_set_level(LED_PIN, 1);
+                            vTaskDelay(pdMS_TO_TICKS(250));
+                            gpio_set_level(LED_PIN, 0);
+                            vTaskDelay(pdMS_TO_TICKS(250));
+                        }
+                    }
+                    // Retorna ao estado IDLE
+                    contador = 0; 
                 }
                 
-                // Debounce: evitar ler o mesmo tom várias vezes seguidas
-                vTaskDelay(pdMS_TO_TICKS(1000)); 
-                break;
-
-            default:
-                break;
+                // Debounce para impedir leituras múltiplas e limpar restos de som no buffer
+                vTaskDelay(pdMS_TO_TICKS(800));
+                xQueueReset(XQ); 
             }
-        }
-        // Processamento dos estados de saída
-        if (estado_atual == VALIDATING) {
-            if (memcmp(tentativa, SEQ_ABRIR, sizeof(SEQ_ABRIR)) == 0) {
-                ESP_LOGI(TAG, "ACESSO CONCEDIDO: ABRIR");
-                gpio_set_level(LED_PIN, 1); // Liga LED
-                estado_atual = IDLE;
-            } 
-            else if (memcmp(tentativa, SEQ_FECHAR, sizeof(SEQ_FECHAR)) == 0) {
-                ESP_LOGI(TAG, "ACESSO CONCEDIDO: FECHAR");
-                gpio_set_level(LED_PIN, 0); // Desliga LED
-                estado_atual = IDLE;
-            } 
-            else {
-                ESP_LOGW(TAG, "SEQUÊNCIA ERRADA!");
-                estado_atual = ERROR_BLINK;
-            }
-            contador = 0;
-        }
-
-        if (estado_atual == ERROR_BLINK) {
-            // Requisito: LED a piscar durante 5 segundos
-            for (int i = 0; i < 10; i++) {
-                gpio_set_level(LED_PIN, 1);
-                vTaskDelay(pdMS_TO_TICKS(250));
-                gpio_set_level(LED_PIN, 0);
-                vTaskDelay(pdMS_TO_TICKS(250));
-            }
-            estado_atual = IDLE;
         }
     }
 }
 
-/* ADC Callback - called when one frame was acquired */
 static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data)
 {
     BaseType_t mustYield = pdFALSE;
-    //Notify that ADC continuous driver has done enough number of conversions
     vTaskNotifyGiveFromISR(s_task_handle, &mustYield);
-
     return (mustYield == pdTRUE);
 }
 
-/* ADC init function */
 static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc_continuous_handle_t *out_handle)
 {
     adc_continuous_handle_t handle = NULL;
@@ -329,10 +274,6 @@ static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc
         adc_pattern[i].channel = channel[i] & 0x7;
         adc_pattern[i].unit = MICEX_ADC_UNIT;
         adc_pattern[i].bit_width = MICEX_ADC_BIT_WIDTH;
-
-        ESP_LOGI(TAG, "adc_pattern[%d].atten is :%"PRIx8, i, adc_pattern[i].atten);
-        ESP_LOGI(TAG, "adc_pattern[%d].channel is :%"PRIx8, i, adc_pattern[i].channel);
-        ESP_LOGI(TAG, "adc_pattern[%d].unit is :%"PRIx8, i, adc_pattern[i].unit);
     }
     dig_cfg.adc_pattern = adc_pattern;
     ESP_ERROR_CHECK(adc_continuous_config(handle, &dig_cfg));
