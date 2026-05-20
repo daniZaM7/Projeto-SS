@@ -54,11 +54,11 @@
 #define MICEX_ADC_ATTEN                   ADC_ATTEN_DB_2_5            
 #define MICEX_ADC_BIT_WIDTH               SOC_ADC_DIGI_MAX_BITWIDTH   
 
-#define MICEX_ADC_FRAME_SIZE             512                           
+#define MICEX_ADC_FRAME_SIZE             128                
 #define MICEX_ADC_BUF_SIZE               (4 * MICEX_ADC_FRAME_SIZE)    
-#define MICEX_ADC_SAMPLE_FREQ            8000 // Frequência de amostragem definida para os filtros
+#define MICEX_ADC_SAMPLE_FREQ            20000 // Frequência de amostragem definida para os filtros
 
-#define MICEX_SOUND_SAMPLES_BUF_SIZE     2048 
+#define MICEX_SOUND_SAMPLES_BUF_SIZE     128
 #define CONV_OUT_SIZE                    (MICEX_SOUND_SAMPLES_BUF_SIZE + 128 - 1) // Tamanho da saída da convolução (N + M - 1)
 
 #define LED_PIN 11 // Pino definido no enunciado
@@ -87,12 +87,12 @@ QueueHandle_t XQ;
 const int SEQ_ABRIR[4]  = {0, 1, 2, 0}; 
 const int SEQ_FECHAR[4] = {0, 2, 1, 0};
 
-/* Filtros FIR (N=128, Fs=8000) */
-__attribute__((aligned(16))) const float filtro_tom0[128] = {0.000465, -0.000268, -0.000768, -0.000331, 0.000650, 0.000967, 0.000023, -0.001200, -0.001073, 0.000595, 0.001888, 0.000885, -0.001634, -0.002541, -0.000135, 0.003074, 0.002813, -0.001402, -0.004667, -0.002258, 0.003762, 0.005914, 0.000471, -0.006661, -0.006143, 0.002717, 0.009460, 0.004697, -0.007063, -0.011244, -0.001176, 0.011842, 0.011040, -0.004325, -0.015915, -0.008122, 0.011094, 0.017973, 0.002309, -0.017848, -0.016886, 0.005845, 0.022971, 0.012071, -0.015040, -0.024902, -0.003772, 0.023451, 0.022574, -0.006868, -0.029134, -0.015772, 0.017977, 0.030511, 0.005301, -0.027344, -0.026818, 0.007114, 0.032941, 0.018365, -0.019181, -0.033440, -0.006529, 0.028563, 0.028563, -0.006529, -0.033440, -0.019181, 0.018365, 0.032941, 0.007114, -0.026818, -0.027344, 0.005301, 0.030511, 0.017977, -0.015772, -0.029134, -0.006868, 0.022574, 0.023451, -0.003772, -0.024902, -0.015040, 0.012071, 0.022971, 0.005845, -0.016886, -0.017848, 0.002309, 0.017973, 0.011094, -0.008122, -0.015915, -0.004325, 0.011040, 0.011842, -0.001176, -0.011244, -0.007063, 0.004697, 0.009460, 0.002717, -0.006143, -0.006661, 0.000471, 0.005914, 0.003762, -0.002258, -0.004667, -0.001402, 0.002813, 0.003074, -0.000135, -0.002541, -0.001634, 0.000885, 0.001888, 0.000595, -0.001073, -0.001200, 0.000023, 0.000967, 0.000650, -0.000331, -0.000768, -0.000268, 0.000465};
+/* Filtros FIR (N=128, Fs=20000) */
+__attribute__((aligned(16))) const float filtro_tom0[128] = {-0.000232, -0.001121, -0.001813, -0.002169, -0.002088, -0.001535, -0.000559, 0.000696, 0.001997, 0.003051, 0.003566, 0.003316, 0.002216, 0.000376, -0.001893, -0.004109, -0.005719, -0.006223, -0.005312, -0.002979, 0.000430, 0.004250, 0.007614, 0.009649, 0.009683, 0.007448, 0.003193, -0.002316, -0.007919, -0.012307, -0.014318, -0.013237, -0.009014, -0.002335, 0.005471, 0.012697, 0.017629, 0.018952, 0.016092, 0.009403, 0.000150, -0.009729, -0.018027, -0.022774, -0.022699, -0.017566, -0.008282, 0.003262, 0.014574, 0.023114, 0.026867, 0.024829, 0.017263, 0.005687, -0.007440, -0.019248, -0.027094, -0.029168, -0.024913, -0.015173, -0.002025, 0.011675, 0.022925, 0.029248, 0.029248, 0.022925, 0.011675, -0.002025, -0.015173, -0.024913, -0.029168, -0.027094, -0.019248, -0.007440, 0.005687, 0.017263, 0.024829, 0.026867, 0.023114, 0.014574, 0.003262, -0.008282, -0.017566, -0.022699, -0.022774, -0.018027, -0.009729, 0.000150, 0.009403, 0.016092, 0.018952, 0.017629, 0.012697, 0.005471, -0.002335, -0.009014, -0.013237, -0.014318, -0.012307, -0.007919, -0.002316, 0.003193, 0.007448, 0.009683, 0.009649, 0.007614, 0.004250, 0.000430, -0.002979, -0.005312, -0.006223, -0.005719, -0.004109, -0.001893, 0.000376, 0.002216, 0.003316, 0.003566, 0.003051, 0.001997, 0.000696, -0.000559, -0.001535, -0.002088, -0.002169, -0.001813, -0.001121, -0.000232};
 
-__attribute__((aligned(16))) const float filtro_tom1[128] = {-0.000556, -0.000272, 0.000750, 0.000047, -0.000928, 0.000291, 0.001049, -0.000765, -0.001041, 0.001372, 0.000805, -0.002058, -0.000242, 0.002702, -0.000718, -0.003122, 0.002073, 0.003095, -0.003714, -0.002405, 0.005413, 0.000900, -0.006834, 0.001443, 0.007573, -0.004473, -0.007238, 0.007844, 0.005534, -0.011034, -0.002354, 0.013416, -0.002151, -0.014356, 0.007544, 0.013341, -0.013129, -0.010099, 0.018037, 0.004701, -0.021351, 0.002402, 0.022277, -0.010399, -0.020293, 0.018212, 0.015286, -0.024658, -0.007613, 0.028632, -0.001909, -0.029308, 0.012093, 0.026298, -0.021559, -0.019750, 0.028938, 0.010357, -0.033101, 0.000729, 0.033349, -0.012059, -0.029537, 0.022114, 0.022114, -0.029537, -0.012059, 0.033349, 0.000729, -0.033101, 0.010357, 0.028938, -0.019750, -0.021559, 0.026298, 0.012093, -0.029308, -0.001909, 0.028632, -0.007613, -0.024658, 0.015286, 0.018212, -0.020293, -0.010399, 0.022277, 0.002402, -0.021351, 0.004701, 0.018037, -0.010099, -0.013129, 0.013341, 0.007544, -0.014356, -0.002151, 0.013416, -0.002354, -0.011034, 0.005534, 0.007844, -0.007238, -0.004473, 0.007573, 0.001443, -0.006834, 0.000900, 0.005413, -0.002405, -0.003714, 0.003095, 0.002073, -0.003122, -0.000718, 0.002702, -0.000242, -0.002058, 0.000805, 0.001372, -0.001041, -0.000765, 0.001049, 0.000291, -0.000928, 0.000047, 0.000750, -0.000272, -0.000556};
+__attribute__((aligned(16))) const float filtro_tom1[128] = {0.002000, 0.001701, 0.000605, -0.000849, -0.002034, -0.002372, -0.001590, 0.000103, 0.002025, 0.003258, 0.003055, 0.001254, -0.001523, -0.004032, -0.004933, -0.003473, 0.000017, 0.004094, 0.006767, 0.006440, 0.002809, -0.002783, -0.007787, -0.009590, -0.006846, -0.000339, 0.007144, 0.011985, 0.011463, 0.005238, -0.004216, -0.012562, -0.015576, -0.011274, -0.001104, 0.010467, 0.017906, 0.017264, 0.008243, -0.005384, -0.017337, -0.021732, -0.015984, -0.002262, 0.013284, 0.023295, 0.022704, 0.011300, -0.005949, -0.021064, -0.026774, -0.020033, -0.003633, 0.014951, 0.026989, 0.026635, 0.013780, -0.005768, -0.022929, -0.029608, -0.022543, -0.004912, 0.015113, 0.028184, 0.028184, 0.015113, -0.004912, -0.022543, -0.029608, -0.022929, -0.005768, 0.013780, 0.026635, 0.026989, 0.014951, -0.003633, -0.020033, -0.026774, -0.021064, -0.005949, 0.011300, 0.022704, 0.023295, 0.013284, -0.002262, -0.015984, -0.021732, -0.017337, -0.005384, 0.008243, 0.017264, 0.017906, 0.010467, -0.001104, -0.011274, -0.015576, -0.012562, -0.004216, 0.005238, 0.011463, 0.011985, 0.007144, -0.000339, -0.006846, -0.009590, -0.007787, -0.002783, 0.002809, 0.006440, 0.006767, 0.004094, 0.000017, -0.003473, -0.004933, -0.004032, -0.001523, 0.001254, 0.003055, 0.003258, 0.002025, 0.000103, -0.001590, -0.002372, -0.002034, -0.000849, 0.000605, 0.001701, 0.002000};
 
-__attribute__((aligned(16))) const float filtro_tom2[128] = {-0.000221, 0.000657, -0.000698, 0.000244, 0.000486, -0.001026, 0.000936, -0.000118, -0.001010, 0.001679, -0.001256, -0.000240, 0.001962, -0.002654, 0.001519, 0.001053, -0.003471, 0.003872, -0.001477, -0.002552, 0.005566, -0.005110, 0.000816, 0.004903, -0.008117, 0.006023, 0.000775, -0.008133, 0.010824, -0.006195, -0.003513, 0.012077, -0.013242, 0.005223, 0.007443, -0.016368, 0.014848, -0.002820, -0.012385, 0.020470, -0.015141, -0.001098, 0.017925, -0.023762, 0.013750, 0.006362, -0.023459, 0.025643, -0.010533, -0.012536, 0.028282, -0.025659, 0.005628, 0.018976, -0.031713, 0.023598, 0.000540, -0.024924, 0.033217, -0.019550, -0.007313, 0.029635, -0.032514, 0.013909, 0.013909, -0.032514, 0.029635, -0.007313, -0.019550, 0.033217, -0.024924, 0.000540, 0.023598, -0.031713, 0.018976, 0.005628, -0.025659, 0.028282, -0.012536, -0.010533, 0.025643, -0.023459, 0.006362, 0.013750, -0.023762, 0.017925, -0.001098, -0.015141, 0.020470, -0.012385, -0.002820, 0.014848, -0.016368, 0.007443, 0.005223, -0.013242, 0.012077, -0.003513, -0.006195, 0.010824, -0.008133, 0.000775, 0.006023, -0.008117, 0.004903, 0.000816, -0.005110, 0.005566, -0.002552, -0.001477, 0.003872, -0.003471, 0.001053, 0.001519, -0.002654, 0.001962, -0.000240, -0.001256, 0.001679, -0.001010, -0.000118, 0.000936, -0.001026, 0.000486, 0.000244, -0.000698, 0.000657, -0.000221};
+__attribute__((aligned(16))) const float filtro_tom2[128] = {-0.000671, 0.001131, 0.002102, 0.001440, -0.000465, -0.002206, -0.002330, -0.000495, 0.002067, 0.003298, 0.001902, -0.001397, -0.004095, -0.003739, -0.000079, 0.004304, 0.005737, 0.002469, -0.003463, -0.007376, -0.005587, 0.001236, 0.007994, 0.008911, 0.002410, -0.006964, -0.011638, -0.007097, 0.003909, 0.012857, 0.012028, 0.001111, -0.011786, -0.016115, -0.007509, 0.008022, 0.018207, 0.014218, -0.001727, -0.017380, -0.019875, -0.006312, 0.013212, 0.023109, 0.014777, -0.005961, -0.022871, -0.022060, -0.003409, 0.018727, 0.026605, 0.013369, -0.011013, -0.027268, -0.022120, 0.000833, 0.023601, 0.027971, 0.010135, -0.016002, -0.029713, -0.019966, 0.005661, 0.026901, 0.026901, 0.005661, -0.019966, -0.029713, -0.016002, 0.010135, 0.027971, 0.023601, 0.000833, -0.022120, -0.027268, -0.011013, 0.013369, 0.026605, 0.018727, -0.003409, -0.022060, -0.022871, -0.005961, 0.014777, 0.023109, 0.013212, -0.006312, -0.019875, -0.017380, -0.001727, 0.014218, 0.018207, 0.008022, -0.007509, -0.016115, -0.011786, 0.001111, 0.012028, 0.012857, 0.003909, -0.007097, -0.011638, -0.006964, 0.002410, 0.008911, 0.007994, 0.001236, -0.005587, -0.007376, -0.003463, 0.002469, 0.005737, 0.004304, -0.000079, -0.003739, -0.004095, -0.001397, 0.001902, 0.003298, 0.002067, -0.000495, -0.002330, -0.002206, -0.000465, 0.001440, 0.002102, 0.001131, -0.000671};
 /* *************************************************************** * Function prototypes 
  *****************************************************************/
  static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc_continuous_handle_t *out_handle);
@@ -176,40 +176,39 @@ void pv_processor_task(void *pvParam)
     float * sound_samp_buf_proc;           
     sound_samp_buf_proc = heap_caps_malloc(sizeof(float) * MICEX_SOUND_SAMPLES_BUF_SIZE, MALLOC_CAP_DMA);         
     
-    // Variáveis da Máquina de Estados (FSM)
+    // Variáveis da Máquina de Estados (Cofre)
     int tentativa[4];
     int contador = 0;
-    
-    // NOVA VARIÁVEL: A "memória" do último som
     int ultimo_tom = -1; 
     
-    // O teu threshold ajustado 
-    float threshold = 500.0; 
+    // Variáveis de Blindagem Temporal
+    int tom_em_validacao = -1;
+    int contagem_validacao = 0;
+    
+    // ==========================================
+    // AFINAÇÕES DO ENGENHEIRO
+    // ==========================================
+    const int FRAMES_NECESSARIOS = 5; // Exige som puro durante ~16ms (5 * 3.2ms)
+    float threshold = 50.0;          // Limiar de energia com buffer de 64
+    float margem = 1.0;               // O vencedor tem de ser 20% mais forte que os outros
+    // ==========================================
 
     for(;;) {
         // Aguarda por novos dados do ADC
         if (xQueueReceive(XQ, (void *)sound_samp_buf_proc, portMAX_DELAY) == pdTRUE) {
             
-            // ---------------------------------------------------------
-            // >> ALTERAÇÃO 1: REMOVER A COMPONENTE DC (Centrar no zero)
-            // ---------------------------------------------------------
+            // 1. Remover DC Offset (Centrar onda no zero)
             float media = 0;
-            for(int i=0; i < MICEX_SOUND_SAMPLES_BUF_SIZE; i++) {
-                media += sound_samp_buf_proc[i];
-            }
+            for(int i=0; i < MICEX_SOUND_SAMPLES_BUF_SIZE; i++) media += sound_samp_buf_proc[i];
             media = media / MICEX_SOUND_SAMPLES_BUF_SIZE;
-            
-            for(int i=0; i < MICEX_SOUND_SAMPLES_BUF_SIZE; i++) {
-                sound_samp_buf_proc[i] -= media; // Puxa a onda para o zero!
-            }
-            // ---------------------------------------------------------
+            for(int i=0; i < MICEX_SOUND_SAMPLES_BUF_SIZE; i++) sound_samp_buf_proc[i] -= media;
 
-            /* 1. Aplicação dos Filtros FIR via Convolução */
+            // 2. Aplicação dos Filtros FIR
             dsps_conv_f32(sound_samp_buf_proc, MICEX_SOUND_SAMPLES_BUF_SIZE, filtro_tom0, 128, output_tom0);
             dsps_conv_f32(sound_samp_buf_proc, MICEX_SOUND_SAMPLES_BUF_SIZE, filtro_tom1, 128, output_tom1);
             dsps_conv_f32(sound_samp_buf_proc, MICEX_SOUND_SAMPLES_BUF_SIZE, filtro_tom2, 128, output_tom2);
 
-            /* 2. Cálculo da Energia (Soma dos quadrados) */
+            // 3. Cálculo da Energia
             float energia0 = 0, energia1 = 0, energia2 = 0;
             for (int i = 0; i < CONV_OUT_SIZE; i++) {
                 energia0 += output_tom0[i] * output_tom0[i];
@@ -217,61 +216,70 @@ void pv_processor_task(void *pvParam)
                 energia2 += output_tom2[i] * output_tom2[i];
             }
 
-            // ---------------------------------------------------------
-            // >> ALTERAÇÃO 2: IMPRIMIR AS ENERGIAS REAIS (Para descobrires o threshold)
-            // ---------------------------------------------------------
-            // Podes comentar esta linha mais tarde quando tudo funcionar
-            ESP_LOGI(TAG, "Leitura: E0:%.0f | E1:%.0f | E2:%.0f", energia0, energia1, energia2);
-            // ---------------------------------------------------------
+            // Opcional: Descomentar APENAS para calibrar, se comentado não bloqueia o terminal
+            
+            if (energia0 > 50.0 || energia1 > 50.0 || energia2 > 50.0) {
+                ESP_LOGI(TAG, "Energia -> E0:%.0f | E1:%.0f | E2:%.0f", energia0, energia1, energia2);
+            }
+            
 
-            /* 3. Deteção do Tom */
-            int tom_detetado = -1;
-            if (energia0 > energia1 && energia0 > energia2 && energia0 > threshold) tom_detetado = 0;
-            else if (energia1 > energia0 && energia1 > energia2 && energia1 > threshold) tom_detetado = 1;
-            else if (energia2 > energia0 && energia2 > energia1 && energia2 > threshold) tom_detetado = 2;
+            // 4. Deteção Bruta (Teste de Pureza com Margem)
+            int tom_candidato = -1;
+            if (energia0 > (energia1 * margem) && energia0 > (energia2 * margem) && energia0 > threshold) tom_candidato = 0;
+            else if (energia1 > (energia0 * margem) && energia1 > (energia2 * margem) && energia1 > threshold) tom_candidato = 1;
+            else if (energia2 > (energia0 * margem) && energia2 > (energia1 * margem) && energia2 > threshold) tom_candidato = 2;
 
-            /* =========================================================
-               4. LÓGICA DE "QUALQUER DURAÇÃO" (Edge Detection)
-               ========================================================= */
-            if (tom_detetado != -1) {
-                // SÓ avança se o som for DIFERENTE do som que já estava a tocar
-                if (tom_detetado != ultimo_tom) {
-                    ultimo_tom = tom_detetado; // Guarda na memória
+            // 5. Blindagem Temporal (Validação contínua)
+            if (tom_candidato != -1) {
+                if (tom_candidato == tom_em_validacao) {
+                    contagem_validacao++;
+                } else {
+                    tom_em_validacao = tom_candidato;
+                    contagem_validacao = 1;
+                }
+
+                // SÓ AVANÇA SE ATINGIR OS FRAMES EXIGIDOS
+                if (contagem_validacao >= FRAMES_NECESSARIOS) {
                     
-                    ESP_LOGI(TAG, "NOVO Tom Registado: %d (Energia: E0:%.0f | E1:%.0f | E2:%.0f)", 
-                             tom_detetado, energia0, energia1, energia2);
-                    
-                    tentativa[contador++] = tom_detetado;
-                    
-                    // Verifica se já temos 4 toques
-                    if (contador == 4) {
-                        if (memcmp(tentativa, SEQ_ABRIR, sizeof(SEQ_ABRIR)) == 0) {
-                            ESP_LOGI(TAG, "Acesso Concedido: ABRIR");
-                            gpio_set_level(LED_PIN, 1); 
-                        } 
-                        else if (memcmp(tentativa, SEQ_FECHAR, sizeof(SEQ_FECHAR)) == 0) {
-                            ESP_LOGI(TAG, "Acesso Concedido: FECHAR");
-                            gpio_set_level(LED_PIN, 0); 
-                        } 
-                        else {
-                            ESP_LOGW(TAG, "Sequência Errada! A piscar LED...");
-                            for (int i = 0; i < 10; i++) { 
-                                gpio_set_level(LED_PIN, 1);
-                                vTaskDelay(pdMS_TO_TICKS(150));
-                                gpio_set_level(LED_PIN, 0);
-                                vTaskDelay(pdMS_TO_TICKS(150));
+                    if (tom_candidato != ultimo_tom) {
+                        ultimo_tom = tom_candidato; // Bloqueia repetições seguidas do mesmo tom
+                        
+                        ESP_LOGI(TAG, "+++ TOM VALIDADO E REGISTADO: %d +++", tom_candidato);
+                        
+                        tentativa[contador++] = tom_candidato;
+                        
+                        // Lógica da Password do Cofre
+                        if (contador == 4) {
+                            if (memcmp(tentativa, SEQ_ABRIR, sizeof(SEQ_ABRIR)) == 0) {
+                                ESP_LOGI(TAG, "Acesso Concedido: ABRIR");
+                                gpio_set_level(LED_PIN, 1); 
+                            } 
+                            else if (memcmp(tentativa, SEQ_FECHAR, sizeof(SEQ_FECHAR)) == 0) {
+                                ESP_LOGI(TAG, "Acesso Concedido: FECHAR");
+                                gpio_set_level(LED_PIN, 0); 
+                            } 
+                            else {
+                                ESP_LOGW(TAG, "Sequência Errada! A piscar LED...");
+                                for (int i = 0; i < 10; i++) { 
+                                    gpio_set_level(LED_PIN, 1); vTaskDelay(pdMS_TO_TICKS(150));
+                                    gpio_set_level(LED_PIN, 0); vTaskDelay(pdMS_TO_TICKS(150));
+                                }
                             }
+                            contador = 0;
                         }
-                        contador = 0; // Prepara para nova tentativa
                     }
                 }
             } else {
-                // SE ESTIVER EM SILÊNCIO:
-                // Apaga a memória. Assim, o utilizador pode repetir o mesmo Tom.
-                ultimo_tom = -1;
+                // Silêncio ou Ruído: Reset à validação temporal
+                contagem_validacao = 0; 
+                tom_em_validacao = -1;
+                
+                // Se o silêncio for genuíno, esquece o último tom para permitir repetições (ex: Tom 0 seguido de Tom 0)
+                if (energia0 < (threshold/2) && energia1 < (threshold/2) && energia2 < (threshold/2)) {
+                    ultimo_tom = -1;
+                }
             }
             
-            // Limpa a fila de processamento para evitar acumulação de buffer antigo
             xQueueReset(XQ);
         }
     }
