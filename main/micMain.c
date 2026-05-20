@@ -231,7 +231,7 @@ void pv_processor_task(void *pvParam)
             else if (energia2 > energia0 && energia2 > energia1 && energia2 > threshold) tom_detetado = 2;
 
             /* =========================================================
-               4. NOVA LÓGICA DE "QUALQUER DURAÇÃO" (Edge Detection)
+               4. LÓGICA DE "QUALQUER DURAÇÃO" (Edge Detection)
                ========================================================= */
             if (tom_detetado != -1) {
                 // SÓ avança se o som for DIFERENTE do som que já estava a tocar
