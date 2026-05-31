@@ -62,9 +62,12 @@
                                               
 #define MAX_FILT_IR_LEN                 200     /* Maximum IR filter length */
 
-#define CONV_OUT_SIZE                    (2 * MICEX_SOUND_SAMPLES_BUF_SIZE  - 1) // Saida da convolução (N + M - 1)
 
-#define LED_PIN 11 // Pino da placa 
+#define LED_PIN                         11      // Pino da placa 
+#define FIR_FILTER_LEN                  64      // Tamanho do filtro
+#define CONV_OUT_SIZE                   (MICEX_SOUND_SAMPLES_BUF_SIZE + FIR_FILTER_LEN - 1) // Saida da convolução (N + M - 1)
+#define ENERGY_THRESHOLD                1.5f 
+
 
 
 /* Global variable declarations */
@@ -224,16 +227,15 @@ void pv_processor_task(void *pvParam)
     
     // Variavel de controlo
     int ultimo_tom = -1;
-    float threshold_pureza = 2.0; // Ajustar de acordo com ambiente
     
     
 /* Infinite processing loop */
     for(;;) {
-    
+
         /* Waits for new data */
         if(xQueueReceive(XQ, (void *)sound_samp_buf_proc, portMAX_DELAY) == pdTRUE) { // Reads a sound sample. Blocks if queue is empty.
             ESP_LOGV(TAG, "Process Task got a buffer!");
-            
+ 
 
             // A) Pré-processamento
  				// 1.Componente DC 
@@ -268,42 +270,57 @@ void pv_processor_task(void *pvParam)
             potencia1 = energia1 / (float)CONV_OUT_SIZE;
             potencia2 = energia2 / (float)CONV_OUT_SIZE;
             
-            // D) Estimar ruido 
-            float P_ruido = P_total - (potencia0 + potencia1 + potencia2);		// Filtro rejeita banda
            
-            if (P_ruido < 0) P_ruido = 0;										// Evitar pequenos arredondamentos insignificantes
             
-            // E) Logica de deteção dos tons
+            // D) Logica de deteção dos tons e alguns pequenos filtros
+
             	// 1. Determinação/seleção do tom em causa
             int tom_detetado = -1;
+            float racio_pureza = 5.0f; // Filtro de dominância
+            float P_ruido = 0;
             float maior_potencia = 0;
-            if (potencia0 > potencia1 && potencia0 > potencia2) {
+
+
+                // 2. Algoritmo de decisão 
+            if ((potencia0 > racio_pureza * potencia1) && 
+                (potencia0 > racio_pureza * potencia2) && 
+                (potencia0 > ENERGY_THRESHOLD)) {
                 tom_detetado = 0;
                 maior_potencia = potencia0;
-                
-            } else if (potencia1 > potencia0 && potencia1 > potencia2) {
+                P_ruido = potencia1 + potencia2;
+            } 
+            else if ((potencia1 > racio_pureza * potencia0) && 
+                     (potencia1 > racio_pureza * potencia2) && 
+                     (potencia1 > ENERGY_THRESHOLD)) {
                 tom_detetado = 1;
                 maior_potencia = potencia1;
-                
-            } else if (potencia2 > potencia0 && potencia2 > potencia1) {
+                P_ruido = potencia0 + potencia2;
+            } 
+            else if ((potencia2 > racio_pureza * potencia0) && 
+                     (potencia2 > racio_pureza * potencia1) && 
+                     (potencia2 > ENERGY_THRESHOLD)) {
                 tom_detetado = 2;
                 maior_potencia = potencia2;
+                P_ruido = potencia0 + potencia1;
             }
-            
-				// 2. Determinar se foi tom puro ou ruído
+
+                // 3.  Filtragem de ruído
             if (tom_detetado != -1) {
-                float racio_pureza = maior_potencia / (P_ruido + 0.0001);	// Adicionamos 0.0001 no denominador para evitar divisões por zero
-
-                if (racio_pureza > threshold_pureza) {
-                    // Mantém o tom_detetado
+                float pureza_global = 0.0f;
+                if (P_ruido > 0.0f) {
+                    pureza_global = maior_potencia / P_ruido;
                 } else {
-                    // Falso positivo
-                    tom_detetado = -1; 
+                    pureza_global = 999.0f; // Ruído zero significa pureza máxima
                 }
+                
+                if (pureza_global < 4.0f) { 
+                        ESP_LOGD(TAG, "Tom %d REJEITADO por sopro/ruído! Pureza Global: %.2f", tom_detetado, pureza_global);
+                        tom_detetado = -1; // Descarta o tom
+                    }
             }
 
-            // F) Lógica da Máquina de Estados (FSM) 
-            if (tom_detetado != -1) {	// Só entra aqui se um tom valido (0, 1 ou 2) for capturado
+            // E) Lógica da Máquina de Estados (FSM) 
+            if (tom_detetado != -1) {
                 if (tom_detetado != ultimo_tom) { 
                     ESP_LOGI(TAG, "Tom %d detetado! P0:%.1f | P1:%.1f | P2:%.1f | P_Ruido:%.2f", tom_detetado, potencia0, potencia1, potencia2, P_ruido);
                     
@@ -314,7 +331,6 @@ void pv_processor_task(void *pvParam)
                     
                     // Maquina de estados
                     if (contador == 4) {
-                        // Estado: Verificar Sequência
                         if (memcmp(tentativa, SEQ_ABRIR, sizeof(SEQ_ABRIR)) == 0) {
                             ESP_LOGI(TAG, "Acesso Concedido: ABRIR");
                             gpio_set_level(LED_PIN, 1); 
@@ -322,7 +338,6 @@ void pv_processor_task(void *pvParam)
                             ESP_LOGI(TAG, "Acesso Concedido: FECHAR");
                             gpio_set_level(LED_PIN, 0); 
                         } else {
-                            // Estado: Sequência Errada
                             ESP_LOGW(TAG, "Sequência Errada! [ %d, %d, %d, %d ] -> LED a piscar...", tentativa[0], tentativa[1], tentativa[2], tentativa[3]);
                             for (int i = 0; i < 10; i++) { 
                                 gpio_set_level(LED_PIN, 1);
@@ -340,10 +355,9 @@ void pv_processor_task(void *pvParam)
                     xQueueReset(XQ); 
                 }
             } else {
-                ultimo_tom = -1;	// Limpeza do histórico no silêncio (para notas repetidas)
+                    ultimo_tom = -1;	// Limpeza do histórico no silêncio (para notas repetidas)
             }
         }
-        xQueueReset(XQ);			// Limpeza da QUEUE
     }
 }
 
